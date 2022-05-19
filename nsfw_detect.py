@@ -66,9 +66,7 @@ class NSFWDetector:
         all_outputs = self.nsfw_net.forward_all(
             blobs=output_layers, **{input_name: transformed_image})
 
-        outputs = all_outputs[output_layers[0]][0].astype(float)
-
-        return outputs
+        return all_outputs[output_layers[0]][0].astype(float)
 
     def detect(self, fpath):
         try:

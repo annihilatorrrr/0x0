@@ -103,11 +103,11 @@ class URL(db.Model):
     def geturl(self):
         return url_for("get", path=self.getname(), _external=True) + "\n"
 
-    def get(url):
-        u = URL.query.filter_by(url=url).first()
+    def get(self):
+        u = URL.query.filter_by(url=self).first()
 
         if not u:
-            u = URL(url)
+            u = URL(self)
             db.session.add(u)
             db.session.commit()
 
@@ -147,7 +147,11 @@ class File(db.Model):
             guess = mimedetect.from_buffer(data)
             app.logger.debug(f"MIME - specified: '{file_.content_type}' - detected: '{guess}'")
 
-            if not file_.content_type or not "/" in file_.content_type or file_.content_type == "application/octet-stream":
+            if (
+                not file_.content_type
+                or "/" not in file_.content_type
+                or file_.content_type == "application/octet-stream"
+            ):
                 mime = guess
             else:
                 mime = file_.content_type
@@ -155,7 +159,7 @@ class File(db.Model):
             if mime in app.config["FHOST_MIME_BLACKLIST"] or guess in app.config["FHOST_MIME_BLACKLIST"]:
                 abort(415)
 
-            if mime.startswith("text/") and not "charset" in mime:
+            if mime.startswith("text/") and "charset" not in mime:
                 mime += "; charset=utf-8"
 
             return mime
@@ -218,22 +222,22 @@ class UrlEncoder(object):
             str = (self.alphabet[int(x % n)]) + str
             x = int(x // n)
         padding = self.alphabet[0] * (self.min_length - len(str))
-        return '%s%s' % (padding, str)
+        return f'{padding}{str}'
 
     def debase(self, x):
         n = len(self.alphabet)
-        result = 0
-        for i, c in enumerate(reversed(x)):
-            result += self.alphabet.index(c) * (n ** i)
-        return result
+        return sum(
+            self.alphabet.index(c) * (n**i) for i, c in enumerate(reversed(x))
+        )
 
 su = UrlEncoder(alphabet=app.config["URL_ALPHABET"], min_length=1)
 
 def fhost_url(scheme=None):
-    if not scheme:
-        return url_for(".fhost", _external=True).rstrip("/")
-    else:
-        return url_for(".fhost", _external=True, _scheme=scheme).rstrip("/")
+    return (
+        url_for(".fhost", _external=True, _scheme=scheme).rstrip("/")
+        if scheme
+        else url_for(".fhost", _external=True).rstrip("/")
+    )
 
 def is_fhost_url(url):
     return url.startswith(fhost_url()) or url.startswith(fhost_url("https"))
@@ -254,9 +258,8 @@ def in_upload_bl(addr):
         with app.open_instance_resource(app.config["FHOST_UPLOAD_BLACKLIST"]) as bl:
             check = addr.lstrip("::ffff:")
             for l in bl.readlines():
-                if not l.startswith("#"):
-                    if check == l.rstrip():
-                        return True
+                if not l.startswith("#") and check == l.rstrip():
+                    return True
 
     return False
 
@@ -314,37 +317,32 @@ def get(path):
             if not fpath.is_file():
                 abort(404)
 
-            if app.config["FHOST_USE_X_ACCEL_REDIRECT"]:
-                response = make_response()
-                response.headers["Content-Type"] = f.mime
-                response.headers["Content-Length"] = fpath.stat().st_size
-                response.headers["X-Accel-Redirect"] = "/" + str(fpath)
-                return response
-            else:
+            if not app.config["FHOST_USE_X_ACCEL_REDIRECT"]:
                 return send_from_directory(app.config["FHOST_STORAGE_PATH"], f.sha256, mimetype = f.mime)
-    else:
-        u = URL.query.get(id)
-
-        if u:
-            return redirect(u.url)
+            response = make_response()
+            response.headers["Content-Type"] = f.mime
+            response.headers["Content-Length"] = fpath.stat().st_size
+            response.headers["X-Accel-Redirect"] = f"/{str(fpath)}"
+            return response
+    elif u := URL.query.get(id):
+        return redirect(u.url)
 
     abort(404)
 
 @app.route("/", methods=["GET", "POST"])
 def fhost():
-    if request.method == "POST":
-        sf = None
-
-        if "file" in request.files:
-            return store_file(request.files["file"], request.remote_addr)
-        elif "url" in request.form:
-            return store_url(request.form["url"], request.remote_addr)
-        elif "shorten" in request.form:
-            return shorten(request.form["shorten"])
-
-        abort(400)
-    else:
+    if request.method != "POST":
         return render_template("index.html")
+    sf = None
+
+    if "file" in request.files:
+        return store_file(request.files["file"], request.remote_addr)
+    elif "url" in request.form:
+        return store_url(request.form["url"], request.remote_addr)
+    elif "shorten" in request.form:
+        return shorten(request.form["shorten"])
+
+    abort(400)
 
 @app.route("/robots.txt")
 def robots():
